@@ -245,6 +245,14 @@ export class Player {
     const targets = this.collisionObjects.filter(obj => obj !== this.collider);
     const intersects = raycaster.intersectObjects(targets);
 
+    // --- ОТЛАДКА начало ---
+    console.log('Выстрел! Кол-во пересечений:', intersects.length);
+    if (intersects.length > 0) {
+      const first = intersects[0];
+      console.log('Первое пересечение:', first.object.userData);
+    }
+    // --- ОТЛАДКА конец ---
+
     let hitPoint = null;
     if (intersects.length > 0) {
       const hit = intersects[0];
