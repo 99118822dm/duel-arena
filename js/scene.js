@@ -106,7 +106,7 @@ export function initScene(scene) {
   // Контейнеры
   const containerPositions = [
     [10, 2, 10], [-10, 2, 10], [10, 2, -10], [-10, 2, -10],
-    [20, 2, 0], [-20, 2, 0], [0, 2, 0],
+    [20, 2, 0], [-20, 2, 0],
   ];
   const containerGeo = new THREE.BoxGeometry(2, 4, 3);
   const containerVisMat = new THREE.MeshStandardMaterial({ color: 0x888888 });
