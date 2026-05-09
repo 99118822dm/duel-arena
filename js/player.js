@@ -1,10 +1,14 @@
 import * as THREE from 'three';
 import { spawnExplosion } from './effects.js';
 import { playLaserSound } from './sound.js';
+import { generatorHP, setGeneratorHP } from './scene.js';
+import { tryDestroyDrone } from './drones.js';
 
+// ---------- Заглушка модели платформы ----------
 function createDummyPlatform() {
   const group = new THREE.Group();
 
+  // --- Корпус (основной блок) ---
   const bodyGeo = new THREE.BoxGeometry(2, 1, 3);
   const bodyMat = new THREE.MeshStandardMaterial({ color: 0x3366cc });
   const body = new THREE.Mesh(bodyGeo, bodyMat);
@@ -13,6 +17,7 @@ function createDummyPlatform() {
   body.receiveShadow = true;
   group.add(body);
 
+  // --- Пушка (Gun) ---
   const gunGroup = new THREE.Group();
   gunGroup.name = 'Gun';
   const barrelGeo = new THREE.CylinderGeometry(0.15, 0.15, 1.2, 8);
@@ -31,6 +36,7 @@ function createDummyPlatform() {
   gunGroup.position.set(0, 2.2, 1.5);
   group.add(gunGroup);
 
+  // --- Колёса (4 омни-колеса) ---
   const wheelNames = ['Wheel_FL', 'Wheel_FR', 'Wheel_RL', 'Wheel_RR'];
   const positions = [
     [-1, 0.3,  1.2],
@@ -44,7 +50,7 @@ function createDummyPlatform() {
   wheelNames.forEach((name, i) => {
     const wheel = new THREE.Mesh(wheelGeo, wheelMat);
     wheel.name = name;
-    wheel.rotation.z = Math.PI / 2;
+    wheel.rotation.z = Math.PI / 2; // ось X вдоль вращения
     const [x, y, z] = positions[i];
     wheel.position.set(x, y, z);
     wheel.castShadow = true;
@@ -55,16 +61,17 @@ function createDummyPlatform() {
   return group;
 }
 
+// ---------- Класс игрока ----------
 export class Player {
-  constructor(scene, collisionObjectsRef, isLocal = true, onPlayerHit = null) {
+  constructor(scene, collisionObjectsRef) {
     this.scene = scene;
-    this.isLocal = isLocal;
-    this.onPlayerHit = onPlayerHit;
 
+    // 3D-модель
     this.mesh = createDummyPlatform();
     this.mesh.position.y = 0.5;
     scene.add(this.mesh);
 
+    // Доступ к частям модели
     this.gun = this.mesh.getObjectByName('Gun');
     this.gunBarrel = this.mesh.getObjectByName('GunBarrel');
     this.wheels = {
@@ -74,56 +81,59 @@ export class Player {
       RR: this.mesh.getObjectByName('Wheel_RR'),
     };
 
-    // Увеличенный коллизионный бокс: высота 3 метра, центр Y=3
+    // Коллизионный невидимый меш (высокий хитбокс)
     const colGeo = new THREE.BoxGeometry(2, 6, 3);
     const colMat = new THREE.MeshBasicMaterial({ visible: false });
     this.collider = new THREE.Mesh(colGeo, colMat);
     this.collider.position.copy(this.mesh.position);
-    this.collider.position.y = 3; // поднимаем центр до 3
+    this.collider.position.y = 3;
     this.collider.visible = false;
     this.collider.userData.isPlayer = true;
     scene.add(this.collider);
 
     this.collisionObjects = collisionObjectsRef || [];
-    if (isLocal) {
-      this.collisionObjects.push(this.collider);
-    }
+    this.collisionObjects.push(this.collider);
 
+    // Состояние движения
     this.speed = 8;
     this.yaw = 0;
     this.moveForward = 0;
     this.moveStrafe = 0;
 
+    // Перезарядка
     this.shootCooldown = 5;
     this.shootTimer = 0;
     this.canShoot = true;
 
+    // Анимация отдачи
     this.recoilActive = false;
     this.recoilTime = 0;
     this.originalGunZ = this.gun ? this.gun.position.z : 0;
 
-    this.targetPosition = new THREE.Vector3();
-    this.targetYaw = 0;
+    // Лучи выстрелов
     this.activeBeams = [];
-
-    this.alive = true;
   }
 
+  // Получить Box3 коллизии игрока в мировых координатах
   getCollisionBox() {
     return new THREE.Box3().setFromObject(this.collider);
   }
 
+  // Проверка столкновений (дроны игнорируются)
   checkCollision() {
-    if (!this.alive) return false;
     const playerBox = this.getCollisionBox();
     for (const obj of this.collisionObjects) {
       if (obj === this.collider) continue;
+      if (obj.userData.isDrone) continue; // призраки
       const objBox = new THREE.Box3().setFromObject(obj);
-      if (playerBox.intersectsBox(objBox)) return true;
+      if (playerBox.intersectsBox(objBox)) {
+        return true;
+      }
     }
     return false;
   }
 
+  // Мировые координаты кончика ствола
   getGunWorldPosition() {
     if (this.gunBarrel) {
       const barrelWorldPos = new THREE.Vector3();
@@ -139,43 +149,47 @@ export class Player {
     }
   }
 
+  // Направление выстрела
   getGunDirection() {
     return new THREE.Vector3(0, 0, 1).applyQuaternion(this.mesh.quaternion);
   }
 
+  // Создание визуального луча
   createLaserBeam(start, end) {
     const direction = new THREE.Vector3().subVectors(end, start);
     const length = direction.length();
     const midPoint = new THREE.Vector3().addVectors(start, end).multiplyScalar(0.5);
+
     const beamGeo = new THREE.CylinderGeometry(0.05, 0.05, length, 4);
     const beamMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
     const beam = new THREE.Mesh(beamGeo, beamMat);
     beam.position.copy(midPoint);
-    beam.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.clone().normalize());
+    beam.quaternion.setFromUnitVectors(
+      new THREE.Vector3(0, 1, 0),
+      direction.clone().normalize()
+    );
     this.scene.add(beam);
     this.activeBeams.push({ mesh: beam, timer: 0.2 });
   }
 
+  // Обновление игрока
   update(delta, input) {
+    // Удаление старых лучей
     for (let i = this.activeBeams.length - 1; i >= 0; i--) {
-      this.activeBeams[i].timer -= delta;
-      if (this.activeBeams[i].timer <= 0) {
-        this.scene.remove(this.activeBeams[i].mesh);
+      const beamData = this.activeBeams[i];
+      beamData.timer -= delta;
+      if (beamData.timer <= 0) {
+        this.scene.remove(beamData.mesh);
         this.activeBeams.splice(i, 1);
       }
     }
 
-    if (!this.isLocal) {
-      this.mesh.position.lerp(this.targetPosition, 0.3);
-      this.yaw = THREE.MathUtils.lerp(this.yaw, this.targetYaw, 0.3);
-      this.updateWheels(delta, 0, 0, 0);
-      return;
+    // Поворот от мыши
+    if (input.rotateDelta) {
+      this.yaw += input.rotateDelta;
     }
 
-    if (!this.alive) return;
-
-    if (input.rotateDelta) this.yaw += input.rotateDelta;
-
+    // Движение
     const forwardInput = (input.keys.forward ? 1 : 0) - (input.keys.backward ? 1 : 0);
     const strafeInput = (input.keys.left ? 1 : 0) - (input.keys.right ? 1 : 0);
     this.moveForward = forwardInput;
@@ -190,21 +204,24 @@ export class Player {
     const velocity = direction.multiplyScalar(moveDistance);
 
     const originalPos = this.mesh.position.clone();
+
+    // Движение по X с проверкой коллизии
     this.mesh.position.x += velocity.x;
     this.mesh.position.y = 0.5;
     this.collider.position.x = this.mesh.position.x;
+    this.collider.position.y = 3;
     this.collider.position.z = this.mesh.position.z;
-    this.collider.position.y = 1.5; // фиксируем высоту коллайдера
     if (this.checkCollision()) {
       this.mesh.position.x = originalPos.x;
       this.collider.position.x = originalPos.x;
     }
 
+    // Движение по Z с проверкой коллизии
     this.mesh.position.z += velocity.z;
     this.mesh.position.y = 0.5;
     this.collider.position.x = this.mesh.position.x;
+    this.collider.position.y = 3;
     this.collider.position.z = this.mesh.position.z;
-    this.collider.position.y = 1.5;
     if (this.checkCollision()) {
       this.mesh.position.z = originalPos.z;
       this.collider.position.z = originalPos.z;
@@ -213,18 +230,23 @@ export class Player {
     this.mesh.position.y = 0.5;
     this.collider.position.x = this.mesh.position.x;
     this.collider.position.z = this.mesh.position.z;
-    this.collider.position.y = 1.5;
+    this.collider.position.y = 3;
     this.mesh.rotation.y = this.yaw;
 
+    // Анимация колёс
     this.updateWheels(delta, forwardInput, strafeInput, 0);
 
+    // Перезарядка
     this.shootTimer -= delta;
-    if (this.shootTimer <= 0) this.canShoot = true;
+    if (this.shootTimer <= 0) {
+      this.canShoot = true;
+    }
     if (input.shoot && this.canShoot) {
       this.fire();
       input.shoot = false;
     }
 
+    // Анимация отдачи
     if (this.recoilActive) {
       this.recoilTime -= delta;
       if (this.recoilTime <= 0) {
@@ -238,23 +260,23 @@ export class Player {
     }
   }
 
-  setTarget(x, z, yaw) {
-    this.targetPosition.set(x, 0.5, z);
-    this.targetYaw = yaw;
-  }
-
+  // Выстрел
   fire() {
-    if (!this.canShoot || !this.alive) return;
+    if (!this.canShoot) return;
     this.canShoot = false;
     this.shootTimer = this.shootCooldown;
 
+    // Анимация отдачи
     this.recoilActive = true;
     this.recoilTime = 0.2;
-    if (this.gun) this.gun.position.z = this.originalGunZ - 0.2;
+    if (this.gun) {
+      this.gun.position.z = this.originalGunZ - 0.2;
+    }
 
     const origin = this.getGunWorldPosition();
     const direction = this.getGunDirection();
     const raycaster = new THREE.Raycaster(origin, direction, 0, 200);
+    // Исключаем свой коллайдер
     const targets = this.collisionObjects.filter(obj => obj !== this.collider);
     const intersects = raycaster.intersectObjects(targets);
 
@@ -263,87 +285,90 @@ export class Player {
       const hit = intersects[0];
       hitPoint = hit.point;
 
-      if (hit.object.userData.isPlayer) {
-        if (this.onPlayerHit) {
-          this.onPlayerHit(hitPoint);
-        }
+      if (hit.object.userData.isGenerator) {
+        // Лечение генератора
+        setGeneratorHP(generatorHP + 0.2);
+        // Можно добавить эффект лечения (пока без визуала)
+      } else if (hit.object.userData.isDrone) {
+        // Уничтожение дрона
+        tryDestroyDrone(hit.object);
         spawnExplosion(this.scene, hitPoint);
       } else {
+        // Попадание в препятствие
         spawnExplosion(this.scene, hitPoint);
       }
     }
 
+    // Визуальный луч
     const endPoint = hitPoint || origin.clone().add(direction.clone().multiplyScalar(200));
     this.createLaserBeam(origin, endPoint);
 
+    // Звук выстрела
     playLaserSound(origin);
   }
 
-  die() {
-    if (!this.alive) return;
-    this.alive = false;
-    this.mesh.visible = false;
-    const idx = this.collisionObjects.indexOf(this.collider);
-    if (idx > -1) this.collisionObjects.splice(idx, 1);
-  }
-
-  respawn(x, z) {
-    this.alive = true;
-    this.mesh.visible = true;
-    this.mesh.position.set(x, 0.5, z);
-    this.collider.position.set(x, 1.5, z);
-    this.targetPosition.set(x, 0.5, z);
-    if (!this.collisionObjects.includes(this.collider)) {
-      this.collisionObjects.push(this.collider);
-    }
-    this.shootTimer = 0;
-    this.canShoot = true;
-  }
-
+  // Анимация колёс (устаревший вариант, не используется)
   updateWheelsFromInput(forward, strafe, rotateDir) {
     const wheelRadius = 0.3;
     const angularBase = this.speed / wheelRadius;
     const speeds = { FL: 0, FR: 0, RL: 0, RR: 0 };
+
     if (forward !== 0) {
       const dir = forward > 0 ? 1 : -1;
-      speeds.FL += dir * angularBase; speeds.FR += dir * angularBase;
-      speeds.RL += dir * angularBase; speeds.RR += dir * angularBase;
+      speeds.FL += dir * angularBase;
+      speeds.FR += dir * angularBase;
+      speeds.RL += dir * angularBase;
+      speeds.RR += dir * angularBase;
     }
     if (strafe !== 0) {
       const dir = strafe > 0 ? 1 : -1;
-      speeds.FL -= dir * angularBase; speeds.FR += dir * angularBase;
-      speeds.RL += dir * angularBase; speeds.RR -= dir * angularBase;
+      speeds.FL -= dir * angularBase;
+      speeds.FR += dir * angularBase;
+      speeds.RL += dir * angularBase;
+      speeds.RR -= dir * angularBase;
     }
     if (rotateDir !== 0) {
       const dir = rotateDir > 0 ? 1 : -1;
-      speeds.FL -= dir * angularBase; speeds.FR += dir * angularBase;
-      speeds.RL -= dir * angularBase; speeds.RR += dir * angularBase;
+      speeds.FL -= dir * angularBase;
+      speeds.FR += dir * angularBase;
+      speeds.RL -= dir * angularBase;
+      speeds.RR += dir * angularBase;
     }
+
     for (const name of ['FL', 'FR', 'RL', 'RR']) {
       const wheel = this.wheels[name];
       if (wheel) wheel.rotation.x += speeds[name] * 0.016;
     }
   }
 
+  // Анимация колёс с учётом delta
   updateWheels(delta, forward, strafe, rotateDir) {
     const wheelRadius = 0.3;
     const angularBase = this.speed / wheelRadius;
     const speeds = { FL: 0, FR: 0, RL: 0, RR: 0 };
+
     if (forward !== 0) {
       const dir = forward > 0 ? 1 : -1;
-      speeds.FL += dir * angularBase; speeds.FR += dir * angularBase;
-      speeds.RL += dir * angularBase; speeds.RR += dir * angularBase;
+      speeds.FL += dir * angularBase;
+      speeds.FR += dir * angularBase;
+      speeds.RL += dir * angularBase;
+      speeds.RR += dir * angularBase;
     }
     if (strafe !== 0) {
       const dir = strafe > 0 ? 1 : -1;
-      speeds.FL -= dir * angularBase; speeds.FR += dir * angularBase;
-      speeds.RL += dir * angularBase; speeds.RR -= dir * angularBase;
+      speeds.FL -= dir * angularBase;
+      speeds.FR += dir * angularBase;
+      speeds.RL += dir * angularBase;
+      speeds.RR -= dir * angularBase;
     }
     if (rotateDir !== 0) {
       const dir = rotateDir > 0 ? 1 : -1;
-      speeds.FL -= dir * angularBase; speeds.FR += dir * angularBase;
-      speeds.RL -= dir * angularBase; speeds.RR += dir * angularBase;
+      speeds.FL -= dir * angularBase;
+      speeds.FR += dir * angularBase;
+      speeds.RL -= dir * angularBase;
+      speeds.RR += dir * angularBase;
     }
+
     for (const name of ['FL', 'FR', 'RL', 'RR']) {
       const wheel = this.wheels[name];
       if (wheel) wheel.rotation.x += speeds[name] * delta;
