@@ -23,42 +23,32 @@ export function startWave() {
 }
 
 export function updateDrones(delta, scene, generatorPosition) {
-  // Если волна не активна, но отдых кончился, начинаем новую
   if (!waveActive && restTimer <= 0) {
     startWave();
   }
 
-  // Таймер отдыха между волнами
   if (!waveActive && restTimer > 0) {
     restTimer -= delta;
     return;
   }
 
-  // Спавн дронов, если нужно
+  // Спавн дронов
   if (waveActive && drones.length < maxDronesOnScreen && dronesSpawnedThisWave < dronesToSpawnThisWave) {
     spawnDrone(scene);
   }
 
-  // Обновление существующих дронов
   for (let i = drones.length - 1; i >= 0; i--) {
     const drone = drones[i];
-
-    // Движение к генератору
     const dir = new THREE.Vector3().subVectors(generatorPosition, drone.mesh.position).normalize();
     drone.mesh.position.add(dir.multiplyScalar(drone.speed * delta));
     drone.collider.position.copy(drone.mesh.position);
 
-    // Проверка достижения генератора
     if (drone.mesh.position.distanceTo(generatorPosition) < 1.5) {
       setGeneratorHP(generatorHP - 1);
       destroyDrone(drone, scene);
-      if (generatorHP <= 0) {
-        // Обработка поражения в main.js
-      }
     }
   }
 
-  // Проверка окончания волны
   if (waveActive && dronesSpawnedThisWave >= dronesToSpawnThisWave && drones.length === 0) {
     waveActive = false;
     restTimer = REST_DURATION;
@@ -66,27 +56,25 @@ export function updateDrones(delta, scene, generatorPosition) {
 }
 
 function spawnDrone(scene) {
-  const speed = 4 * (1 + 0.2 * (waveNumber - 1)); // базовая 4 м/с, растёт
+  const speed = 4 * (1 + 0.2 * (waveNumber - 1));
   const geo = new THREE.BoxGeometry(1, 4, 1);
   const mat = new THREE.MeshStandardMaterial({ color: 0xff0000, emissive: 0x330000 });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.castShadow = true;
   mesh.receiveShadow = false;
 
-  // Случайная позиция по периметру арены (граница 48)
   const side = Math.floor(Math.random() * 4);
   const edge = 48;
   let x, z;
   switch (side) {
-    case 0: x = -edge; z = (Math.random() - 0.5) * 2 * edge; break; // левая сторона
-    case 1: x = edge; z = (Math.random() - 0.5) * 2 * edge; break;  // правая
-    case 2: z = -edge; x = (Math.random() - 0.5) * 2 * edge; break; // верхняя
-    case 3: z = edge; x = (Math.random() - 0.5) * 2 * edge; break;  // нижняя
+    case 0: x = -edge; z = (Math.random() - 0.5) * 2 * edge; break;
+    case 1: x = edge; z = (Math.random() - 0.5) * 2 * edge; break;
+    case 2: z = -edge; x = (Math.random() - 0.5) * 2 * edge; break;
+    case 3: z = edge; x = (Math.random() - 0.5) * 2 * edge; break;
   }
-  mesh.position.set(x, 2, z); // центр высоты 4 (Y=2)
+  mesh.position.set(x, 2, z);
   scene.add(mesh);
 
-  // Коллизионный невидимый меш (для рейкастинга)
   const collider = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ visible: false }));
   collider.position.copy(mesh.position);
   collider.visible = false;
@@ -94,15 +82,12 @@ function spawnDrone(scene) {
   scene.add(collider);
   collisionObjects.push(collider);
 
-  drones.push({
-    mesh,
-    collider,
-    speed,
-  });
+  drones.push({ mesh, collider, speed });
   dronesSpawnedThisWave++;
 }
 
-function destroyDrone(drone, scene) {
+// Теперь эта функция экспортируется, чтобы player.js мог её вызвать
+export function destroyDrone(drone, scene) {
   if (!drone) return;
   scene.remove(drone.mesh);
   scene.remove(drone.collider);
@@ -115,18 +100,9 @@ function destroyDrone(drone, scene) {
 }
 
 export function tryDestroyDrone(collider) {
-  const drone = drones.find(d => d.collider === collider);
-  if (drone) {
-    // Взрыв будет создан в player.js, здесь только удаление
-    // Сцену передадим через замыкание? Придётся добавить параметр.
-    // Вызывается из player.fire, где есть this.scene, но мы не можем получить сцену отсюда.
-    // Лучше перенести логику уничтожения в player.fire, а здесь оставить только поиск.
-    return drone;
-  }
-  return null;
+  return drones.find(d => d.collider === collider) || null;
 }
 
-// Очистка всех дронов (для рестарта)
 export function clearDrones(scene) {
   while (drones.length > 0) {
     const drone = drones.pop();
