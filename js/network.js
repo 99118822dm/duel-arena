@@ -26,7 +26,7 @@ export class NetworkManager {
 
   initPeer(id) {
     this.peer = new Peer(id, {
-      host: 'ncc-1701.peerjs.com',
+      host: '0.peerjs.com',      // официальный сигнальный сервер
       port: 443,
       secure: true,
       debug: 0,
